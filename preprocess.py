@@ -2,6 +2,8 @@ import json
 import pathlib
 from xml.etree import ElementTree as ET
 
+from tqdm import tqdm
+
 
 def main(eaf_content, output_dir):
     root = ET.fromstring(eaf_content)
@@ -83,7 +85,7 @@ def main(eaf_content, output_dir):
 if __name__ == "__main__":
     data_dir = pathlib.Path("./elan")
     output_dir = pathlib.Path("./preprocessed")
-    for eaf_path in data_dir.glob("*.eaf"):
+    for eaf_path in tqdm(data_dir.glob("*.eaf")):
         with open(eaf_path, "r", encoding="utf-8") as eaf_file:
             eaf_content = eaf_file.read()
         main(eaf_content, output_dir)
