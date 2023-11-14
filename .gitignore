@@ -1,3 +1,4 @@
 /.venv/
 /.vscode/
+/preprocessed/
 README.md
