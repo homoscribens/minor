@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "hazumi1902"
+version = "0.1.0"
+description = ""
+authors = ["Dash400air_lab <s2110137@jaist.ac.jp>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+tqdm = "^4.66.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
