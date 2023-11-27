@@ -109,25 +109,10 @@ def get_ada_embeddings(sys_utter, user_utter, decomp_dim=100, seed=42):
     return utter_embeddings
 
 
-def main(file_paths, args):
-    dctx = zstd.ZstdDecompressor()
-
-    with open('./ipadic-mecab-2_7_0/system.dic.zst', 'rb') as fp:
-        with dctx.stream_reader(fp) as dict_reader:
-            tokenizer = vibrato.Vibrato(dict_reader.read())
-
-    sys_utters = []
-    user_utters = []
-    labels = []
-    for file_path in tqdm(file_paths):
-        df = pd.read_csv(file_path)
-        sys_utter = df["system_utterance"].tolist()
-        user_utter = df["user_utterance"].fillna("-").tolist()
-        label = df[args.label].tolist()
-
-        sys_utters.extend(sys_utter)
-        user_utters.extend(user_utter)
-        labels.extend(label)
+def preprocess(df, tokenizer, args):
+    sys_utters = df['sys_utter'].tolist()
+    user_utters = df['user_utter'].fillna('-').tolist()
+    labels = df[args.label].tolist()
 
     if args.encoder == 'tfidf':
         utter_embeddings, feature_names = get_tfidf_matrix(
@@ -148,8 +133,41 @@ def main(file_paths, args):
     logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
     logger.info(f"labels.shape: {labels.shape}")
 
+    columns_to_drop = pd.Index([])  # Initialize an empty pandas Index
+
+    # Add to the Index the columns that match each pattern
+    column_keywords_to_drop = ["pcm", "F0", "voice", "[ms]"]
+    for pattern in column_keywords_to_drop:
+        columns_to_drop = columns_to_drop.union(df.filter(like=pattern).columns)
+
+    # Add to the Index the columns that match the regex
+    column_regex_to_drop = ["TC(\d+)", "TS(\d+)", "TC(\d+)"]
+    for regex in column_regex_to_drop:
+        columns_to_drop = columns_to_drop.union(df.filter(regex=regex).columns)
+
+    df = df.drop(columns=columns_to_drop)
+
+    return utter_embeddings, labels, feature_names
+
+
+def main(file_paths, args):
+    dctx = zstd.ZstdDecompressor()
+
+    with open('./ipadic-mecab-2_7_0/system.dic.zst', 'rb') as fp:
+        with dctx.stream_reader(fp) as dict_reader:
+            tokenizer = vibrato.Vibrato(dict_reader.read())
+
+    dataframes = []
+    for file_path in tqdm(file_paths):
+        df = pd.read_csv(file_path)
+        dataframes.append(df)
+
+    df = pd.concat(dataframes, ignore_index=True)
+
+    utter_embeddings, labels, feature_names = preprocess(df, tokenizer, args)
+
     X_train, X_test, y_train, y_test = train_test_split(
-        utter_embeddings, labels, test_size=args.test_size, random_state=42
+        utter_embeddings, labels, test_size=args.test_size, random_state=args.seed
     )
 
     clf = LogisticRegression(random_state=args.seed, max_iter=10000).fit(
@@ -210,6 +228,7 @@ if __name__ == '__main__':
         '--seed', type=int, default=42, help='Random seed for train-test split'
     )
     args = parser.parse_args()
+    logger.info(f"args: {args}")
 
     folder_path = pathlib.Path('preprocessed')
     file_paths = list(folder_path.glob('*.csv'))
