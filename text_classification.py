@@ -1,4 +1,5 @@
 import argparse
+import json
 import pathlib
 from logging import INFO, FileHandler, StreamHandler, basicConfig, getLogger
 
@@ -28,7 +29,9 @@ def initialize_logger():
 logger = initialize_logger()
 
 # OpenAI API key
-client = openai.OpenAI(api_key="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")
+client = openai.OpenAI(
+    api_key="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"
+)
 
 
 def get_tfidf_matrix(tokenizer, sys_utter, user_utter, decomp_dim=100, seed=42):
@@ -47,7 +50,10 @@ def get_tfidf_matrix(tokenizer, sys_utter, user_utter, decomp_dim=100, seed=42):
 
     if not decomp_dim:
         utter_embeddings = np.concatenate(
-            [statistic_embeddings_sys.toarray(), statistic_embeddings_user.toarray()],
+            [
+                statistic_embeddings_sys.toarray(),
+                statistic_embeddings_user.toarray(),
+            ],
             axis=1,
         )
         feature_names = np.concatenate([feature_names_sys, feature_names_user])
@@ -87,7 +93,9 @@ def get_embedding(text):
         embeddings = embeddings_former + embeddings_latter
         return np.array(embeddings)
 
-    response = client.embeddings.create(model="text-embedding-ada-002", input=text)
+    response = client.embeddings.create(
+        model="text-embedding-ada-002", input=text
+    )
     embeddings = [data.embedding for data in response.data]
     return np.array(embeddings)
 
@@ -98,7 +106,8 @@ def get_ada_embeddings(sys_utter, user_utter, decomp_dim=100, seed=42):
 
     reducer = umap.UMAP(n_components=decomp_dim, random_state=seed)
     assert (
-        decomp_dim <= sys_embeddings.shape[1] or decomp_dim <= user_embeddings.shape[1]
+        decomp_dim <= sys_embeddings.shape[1]
+        or decomp_dim <= user_embeddings.shape[1]
     )
 
     logger.info("Fitting UMAP...")
@@ -110,8 +119,8 @@ def get_ada_embeddings(sys_utter, user_utter, decomp_dim=100, seed=42):
 
 
 def preprocess(df, tokenizer, args):
-    sys_utters = df['sys_utter'].tolist()
-    user_utters = df['user_utter'].fillna('-').tolist()
+    sys_utters = df['system_utterance'].tolist()
+    user_utters = df['user_utterance'].fillna('-').tolist()
     labels = df[args.label].tolist()
 
     if args.encoder == 'tfidf':
@@ -133,6 +142,7 @@ def preprocess(df, tokenizer, args):
     logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
     logger.info(f"labels.shape: {labels.shape}")
 
+    """
     columns_to_drop = pd.Index([])  # Initialize an empty pandas Index
 
     # Add to the Index the columns that match each pattern
@@ -141,16 +151,17 @@ def preprocess(df, tokenizer, args):
         columns_to_drop = columns_to_drop.union(df.filter(like=pattern).columns)
 
     # Add to the Index the columns that match the regex
-    column_regex_to_drop = ["TC(\d+)", "TS(\d+)", "TC(\d+)"]
+    column_regex_to_drop = [r"TC(\d+)", r"TS(\d+)", r"TC(\d+)"]
     for regex in column_regex_to_drop:
         columns_to_drop = columns_to_drop.union(df.filter(regex=regex).columns)
 
     df = df.drop(columns=columns_to_drop)
+    """
 
     return utter_embeddings, labels, feature_names
 
 
-def main(file_paths, args):
+def main(args):
     dctx = zstd.ZstdDecompressor()
 
     with open('./ipadic-mecab-2_7_0/system.dic.zst', 'rb') as fp:
@@ -158,7 +169,7 @@ def main(file_paths, args):
             tokenizer = vibrato.Vibrato(dict_reader.read())
 
     dataframes = []
-    for file_path in tqdm(file_paths):
+    for file_path in tqdm(args.file_paths):
         df = pd.read_csv(file_path)
         dataframes.append(df)
 
@@ -167,7 +178,10 @@ def main(file_paths, args):
     utter_embeddings, labels, feature_names = preprocess(df, tokenizer, args)
 
     X_train, X_test, y_train, y_test = train_test_split(
-        utter_embeddings, labels, test_size=args.test_size, random_state=args.seed
+        utter_embeddings,
+        labels,
+        test_size=args.test_size,
+        random_state=args.seed,
     )
 
     clf = LogisticRegression(random_state=args.seed, max_iter=10000).fit(
@@ -177,13 +191,21 @@ def main(file_paths, args):
     score = clf.score(X_test, y_test)
 
     logger.info(f"Accuracy: {score}")
-    logger.info(f"Predicted value counts: {np.unique(preds, return_counts=True)}")
+    logger.info(
+        f"Predicted value counts: {np.unique(preds, return_counts=True)}"
+    )
 
     if not args.decomp_dim:
         coef = clf.coef_[0]
         weighted_indices = [i for i, c in enumerate(coef) if c > args.threshold]
         weighted_features = [feature_names[i] for i in weighted_indices]
+        weighted_dict = {feature_names[i]: coef[i] for i in weighted_indices}
         logger.info(f"Selected features: {weighted_features}")
+        logger.info(f"Weighted dictionary: {weighted_dict}")
+
+    with open(args.output_path, 'w', encoding='utf-8') as fp:
+        json.dump(weighted_dict, fp, indent=4)
+    logger.info(f"Saved weighted dictionary to {args.output_path}")
 
 
 if __name__ == '__main__':
@@ -200,7 +222,10 @@ if __name__ == '__main__':
         ],
     )
     parser.add_argument(
-        '--test_size', type=float, default=0.1, help='Test size for train-test split'
+        '--test_size',
+        type=float,
+        default=0.1,
+        help='Test size for train-test split',
     )
     parser.add_argument(
         '--encoder',
@@ -233,5 +258,11 @@ if __name__ == '__main__':
     folder_path = pathlib.Path('preprocessed')
     file_paths = list(folder_path.glob('*.csv'))
     logger.info(f"file_paths: {file_paths}")
+    args.file_paths = file_paths
 
-    main(file_paths, args)
+    output_folder_path = pathlib.Path('output/texts')
+    if not output_folder_path.exists():
+        output_folder_path.mkdir(parents=True)
+    args.output_path = output_folder_path / f"{args.label}.json"
+
+    main(args)
