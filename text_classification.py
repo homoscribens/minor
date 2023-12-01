@@ -124,7 +124,7 @@ def preprocess(df, tokenizer, args):
     labels = df[args.label].tolist()
 
     if args.encoder == 'tfidf':
-        utter_embeddings, feature_names = get_tfidf_matrix(
+        utter_embeddings, tfidf_feature_names = get_tfidf_matrix(
             tokenizer,
             sys_utters,
             user_utters,
@@ -142,23 +142,30 @@ def preprocess(df, tokenizer, args):
     logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
     logger.info(f"labels.shape: {labels.shape}")
 
-    """
     columns_to_drop = pd.Index([])  # Initialize an empty pandas Index
 
     # Add to the Index the columns that match each pattern
-    column_keywords_to_drop = ["pcm", "F0", "voice", "[ms]"]
+    column_keywords_to_drop = [
+        'pcm',
+        'F0',
+        'voice',
+        '[ms]',
+        'system',
+        "user",
+        "SS",
+        "TS",
+        "TC",
+    ]
     for pattern in column_keywords_to_drop:
         columns_to_drop = columns_to_drop.union(df.filter(like=pattern).columns)
 
-    # Add to the Index the columns that match the regex
-    column_regex_to_drop = [r"TC(\d+)", r"TS(\d+)", r"TC(\d+)"]
-    for regex in column_regex_to_drop:
-        columns_to_drop = columns_to_drop.union(df.filter(regex=regex).columns)
-
     df = df.drop(columns=columns_to_drop)
-    """
 
-    return utter_embeddings, labels, feature_names
+    assert len(df) == len(utter_embeddings)
+    df = pd.concat([df, pd.DataFrame(utter_embeddings)], axis=1)
+    df.columns = df.columns.astype(str)
+
+    return df, labels, tfidf_feature_names
 
 
 def main(args):
@@ -175,16 +182,16 @@ def main(args):
 
     df = pd.concat(dataframes, ignore_index=True)
 
-    utter_embeddings, labels, feature_names = preprocess(df, tokenizer, args)
+    X_df, labels, feature_names = preprocess(df, tokenizer, args)
 
     X_train, X_test, y_train, y_test = train_test_split(
-        utter_embeddings,
+        X_df,
         labels,
         test_size=args.test_size,
         random_state=args.seed,
     )
-
-    clf = LogisticRegression(random_state=args.seed, max_iter=10000).fit(
+    # TODO: Add stratify option
+    clf = LogisticRegression(random_state=args.seed, max_iter=10**100).fit(
         X_train, y_train
     )
     preds = clf.predict(X_test)
@@ -203,9 +210,9 @@ def main(args):
         logger.info(f"Selected features: {weighted_features}")
         logger.info(f"Weighted dictionary: {weighted_dict}")
 
-    with open(args.output_path, 'w', encoding='utf-8') as fp:
-        json.dump(weighted_dict, fp, indent=4)
-    logger.info(f"Saved weighted dictionary to {args.output_path}")
+        with open(args.output_path, 'w', encoding='utf-8') as fp:
+            json.dump(weighted_dict, fp, indent=4)
+        logger.info(f"Saved weighted dictionary to {args.output_path}")
 
 
 if __name__ == '__main__':
