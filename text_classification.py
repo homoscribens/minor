@@ -19,8 +19,8 @@ from tqdm import tqdm
 def initialize_logger():
     basicConfig(
         level=INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[FileHandler('logfile.log'), StreamHandler()],
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[FileHandler("logfile.log"), StreamHandler()],
     )
     return getLogger(__name__)
 
@@ -34,7 +34,9 @@ client = openai.OpenAI(
 )
 
 
-def get_tfidf_matrix(tokenizer, sys_utter, user_utter, decomp_dim=100, seed=42):
+def get_tfidf_matrix(
+    tokenizer, sys_utter, user_utter, decomp_dim=100, seed=42
+):
     logger.info("Fitting TfidfVectorizer...")
     tfidf = TfidfVectorizer(
         analyzer=lambda x: [token.surface() for token in tokenizer.tokenize(x)]
@@ -114,16 +116,18 @@ def get_ada_embeddings(sys_utter, user_utter, decomp_dim=100, seed=42):
     sys_embeddings = reducer.fit_transform(sys_embeddings)
     user_embeddings = reducer.fit_transform(user_embeddings)
 
-    utter_embeddings = np.concatenate([sys_embeddings, user_embeddings], axis=1)
+    utter_embeddings = np.concatenate(
+        [sys_embeddings, user_embeddings], axis=1
+    )
     return utter_embeddings
 
 
 def preprocess(df, tokenizer, args):
-    sys_utters = df['system_utterance'].tolist()
-    user_utters = df['user_utterance'].fillna('-').tolist()
-    labels = df[args.label].tolist()
+    sys_utters = df["system_utterance"].tolist()
+    user_utters = df["user_utterance"].fillna("-").tolist()
+    labels = df[args.label]
 
-    if args.encoder == 'tfidf':
+    if args.encoder == "tfidf":
         utter_embeddings, tfidf_feature_names = get_tfidf_matrix(
             tokenizer,
             sys_utters,
@@ -131,47 +135,51 @@ def preprocess(df, tokenizer, args):
             decomp_dim=args.decomp_dim,
             seed=args.seed,
         )
-    elif args.encoder == 'ada':
+    elif args.encoder == "ada":
         utter_embeddings = get_ada_embeddings(
             sys_utters, user_utters, decomp_dim=args.decomp_dim, seed=args.seed
         )
+    elif args.encoder == "None":
+        utter_embeddings = None
     else:
         raise ValueError(f"Unknown encoder: {args.encoder}")
-
-    labels = np.array(labels)
-    logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
-    logger.info(f"labels.shape: {labels.shape}")
 
     columns_to_drop = pd.Index([])  # Initialize an empty pandas Index
 
     # Add to the Index the columns that match each pattern
     column_keywords_to_drop = [
-        'pcm',
-        'F0',
-        'voice',
-        '[ms]',
-        'system',
+        "pcm",
+        "F0",
+        "voice",
+        "[ms]",
+        "system",
         "user",
         "SS",
         "TS",
         "TC",
     ]
     for pattern in column_keywords_to_drop:
-        columns_to_drop = columns_to_drop.union(df.filter(like=pattern).columns)
+        columns_to_drop = columns_to_drop.union(
+            df.filter(like=pattern).columns
+        )
 
     df = df.drop(columns=columns_to_drop)
 
-    assert len(df) == len(utter_embeddings)
-    df = pd.concat([df, pd.DataFrame(utter_embeddings)], axis=1)
-    df.columns = df.columns.astype(str)
+    if utter_embeddings:
+        assert len(df) == len(utter_embeddings)
+        logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
+        logger.info(f"labels.shape: {labels.shape}")
+        df = pd.concat([df, pd.DataFrame(utter_embeddings)], axis=1)
+        df.columns = df.columns.astype(str)
+        return df, labels, tfidf_feature_names
 
-    return df, labels, tfidf_feature_names
+    return df, labels, None
 
 
 def main(args):
     dctx = zstd.ZstdDecompressor()
 
-    with open('./ipadic-mecab-2_7_0/system.dic.zst', 'rb') as fp:
+    with open("./ipadic-mecab-2_7_0/system.dic.zst", "rb") as fp:
         with dctx.stream_reader(fp) as dict_reader:
             tokenizer = vibrato.Vibrato(dict_reader.read())
 
@@ -190,8 +198,14 @@ def main(args):
         test_size=args.test_size,
         random_state=args.seed,
     )
+
+    logger.info(f"X_train.shape: {X_train.shape}")
+    logger.info(f"X_test.shape: {X_test.shape}")
+    logger.info(f"y_train.shape: {y_train.shape}")
+    logger.info(f"y_test.shape: {y_test.shape}")
+
     # TODO: Add stratify option
-    clf = LogisticRegression(random_state=args.seed, max_iter=10**100).fit(
+    clf = LogisticRegression(random_state=args.seed, max_iter=10**15).fit(
         X_train, y_train
     )
     preds = clf.predict(X_test)
@@ -204,70 +218,69 @@ def main(args):
 
     if not args.decomp_dim:
         coef = clf.coef_[0]
-        weighted_indices = [i for i, c in enumerate(coef) if c > args.threshold]
+        weighted_indices = [
+            i for i, c in enumerate(coef) if c > args.threshold
+        ]
         weighted_features = [feature_names[i] for i in weighted_indices]
         weighted_dict = {feature_names[i]: coef[i] for i in weighted_indices}
         logger.info(f"Selected features: {weighted_features}")
         logger.info(f"Weighted dictionary: {weighted_dict}")
 
-        with open(args.output_path, 'w', encoding='utf-8') as fp:
+        with open(args.output_path, "w", encoding="utf-8") as fp:
             json.dump(weighted_dict, fp, indent=4)
         logger.info(f"Saved weighted dictionary to {args.output_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--label',
+        "--label",
         type=str,
-        default='SS_ternary',
-        help='Label column name in the csv file',
+        default="SS_ternary",
+        help="Label column name in the csv file",
         choices=[
-            'SS_ternary',
-            'TS_ternary',
-            'TC_ternary',
+            "SS_ternary",
+            "TS_ternary",
+            "TC_ternary",
         ],
     )
     parser.add_argument(
-        '--test_size',
+        "--test_size",
         type=float,
         default=0.1,
-        help='Test size for train-test split',
+        help="Test size for train-test split",
     )
     parser.add_argument(
-        '--encoder',
+        "--encoder",
         type=str,
-        default='tfidf',
-        help='Encoder for utterance embeddings',
-        choices=[
-            'tfidf',
-            'ada',
-        ],
+        default="tfidf",
+        help="Encoder for utterance embeddings",
+        choices=["tfidf", "ada", "None"],
     )
     parser.add_argument(
-        '--decomp_dim',
+        "--decomp_dim",
         type=int,
         default=100,
-        help='Number of dimensions for TruncatedSVD',
+        help="Number of dimensions for TruncatedSVD",
     )
     parser.add_argument(
-        '--threshold',
+        "--threshold",
         type=float,
         default=0.3,
-        help='Threshold for feature selection',
+        help="Threshold for feature selection",
     )
     parser.add_argument(
-        '--seed', type=int, default=42, help='Random seed for train-test split'
+        "--seed", type=int, default=42, help="Random seed for train-test split"
     )
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
-    folder_path = pathlib.Path('preprocessed')
-    file_paths = list(folder_path.glob('*.csv'))
+    folder_path = pathlib.Path("preprocessed")
+    file_paths = list(folder_path.glob("*.csv"))
     logger.info(f"file_paths: {file_paths}")
     args.file_paths = file_paths
 
-    output_folder_path = pathlib.Path('output/texts')
+    output_folder_path = pathlib.Path("output/texts")
     if not output_folder_path.exists():
         output_folder_path.mkdir(parents=True)
     args.output_path = output_folder_path / f"{args.label}.json"
