@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import pathlib
 from logging import INFO, FileHandler, StreamHandler, basicConfig, getLogger
 
@@ -29,9 +30,8 @@ def initialize_logger():
 logger = initialize_logger()
 
 # OpenAI API key
-client = openai.OpenAI(
-    api_key="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"
-)
+api_key = os.getenv("OPENAI_API_KEY")
+client = openai.OpenAI(api_key=api_key)
 
 
 def get_tfidf_matrix(
