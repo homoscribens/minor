@@ -1,10 +1,12 @@
-/.venv/
-/.vscode/
 /preprocessed/
 README.md
-.python-version
-eda.ipynb
 /ipadic-mecab-2_7_0
 logfile.log
 /output
 columns.txt
+/lightning_logs
+/checkpoints_SS_ternary
+/checkpoints_TS_ternary
+/__pycache__
+/.*
+*.ipynb
