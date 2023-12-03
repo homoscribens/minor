@@ -143,6 +143,7 @@ def preprocess(df, tokenizer, args):
         utter_embeddings = get_ada_embeddings(
             sys_utters, user_utters, decomp_dim=args.decomp_dim, seed=args.seed
         )
+        tfidf_feature_names = None
     elif args.encoder == "None":
         utter_embeddings = None
     else:
@@ -169,7 +170,7 @@ def preprocess(df, tokenizer, args):
 
     df = df.drop(columns=columns_to_drop)
 
-    if utter_embeddings is not None and tfidf_feature_names is not None:
+    if args.encoder == "tfidf":
         assert len(df) == len(utter_embeddings)
         logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
         logger.info(f"labels.shape: {labels.shape}")
@@ -182,7 +183,9 @@ def preprocess(df, tokenizer, args):
 
 def create_dataloader(X, y, batch_size=32):
     dataset = NNDataset(X.to_numpy(), y.to_numpy())
-    dataloader = DataLoader(dataset, batch_size=batch_size)
+    dataloader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, num_workers=20
+    )
     return dataloader
 
 
@@ -318,6 +321,7 @@ def main(args):
 
 
 if __name__ == "__main__":
+    logger.info("Initializing...")
     parser = argparse.ArgumentParser()
 
     # Data preprocessing hyperparameters
