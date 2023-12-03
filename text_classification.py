@@ -2,7 +2,8 @@ import argparse
 import json
 import os
 import pathlib
-from logging import INFO, FileHandler, StreamHandler, basicConfig, getLogger
+from datetime import datetime
+from logging import INFO, basicConfig, getLogger
 
 import numpy as np
 import openai
@@ -22,15 +23,29 @@ from net import NeuralNet, NNDataset
 
 
 def initialize_logger():
+    log_filename = (
+        "logs/log_file_" + datetime.now().strftime("%Y-%m-%d") + ".log"
+    )
+
+    if not pathlib.Path("logs").exists():
+        pathlib.Path("logs").mkdir()
+
+    log_format = (
+        "%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s"
+    )
+
     basicConfig(
         level=INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[FileHandler("logfile.log"), StreamHandler()],
+        format=log_format,
+        filename=log_filename,
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    return getLogger(__name__)
+
+    logger = getLogger(__name__)
+
+    return logger
 
 
-# Usage
 logger = initialize_logger()
 
 # OpenAI API key
@@ -182,6 +197,7 @@ def preprocess(df, tokenizer, args):
 
 
 def create_dataloader(X, y, batch_size=32):
+    logger.info("Creating dataloader...")
     dataset = NNDataset(X.to_numpy(), y.to_numpy())
     dataloader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True, num_workers=20
@@ -225,8 +241,10 @@ def train_nn(
     )
 
     # Train the model
+    logger.info("Training the model...")
     trainer.fit(model, train_loader, valid_loader)
 
+    logger.info("Testing the model...")
     score = trainer.test(model, test_loader)
 
     return score
@@ -260,7 +278,6 @@ def main(args):
     logger.info(f"y_train.shape: {y_train.shape}")
     logger.info(f"y_test.shape: {y_test.shape}")
 
-    # TODO: Add stratify option
     if args.model == "logistic":
         clf = LogisticRegression(
             random_state=args.seed, max_iter=10**17
@@ -278,12 +295,6 @@ def main(args):
         train_loader = create_dataloader(X_train, y_train, args.batch_size)
         valid_loader = create_dataloader(X_valid, y_valid, args.batch_size)
         test_loader = create_dataloader(X_test, y_test, args.batch_size)
-
-        for batch in train_loader:
-            x, y = batch
-            print(x.shape)
-            print(y.shape)
-            break
 
         input_size = X_train.shape[1]
         hidden_size = 100
