@@ -7,6 +7,7 @@ from logging import INFO, FileHandler, StreamHandler, basicConfig, getLogger
 import numpy as np
 import openai
 import pandas as pd
+import pytorch_lightning as pl
 import umap
 import vibrato
 import zstandard as zstd
@@ -14,7 +15,10 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+from net import NeuralNet, NNDataset
 
 
 def initialize_logger():
@@ -165,7 +169,7 @@ def preprocess(df, tokenizer, args):
 
     df = df.drop(columns=columns_to_drop)
 
-    if utter_embeddings:
+    if utter_embeddings is not None and tfidf_feature_names is not None:
         assert len(df) == len(utter_embeddings)
         logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
         logger.info(f"labels.shape: {labels.shape}")
@@ -174,6 +178,55 @@ def preprocess(df, tokenizer, args):
         return df, labels, tfidf_feature_names
 
     return df, labels, None
+
+
+def create_dataloader(X, y, batch_size=32):
+    dataset = NNDataset(X.to_numpy(), y.to_numpy())
+    dataloader = DataLoader(dataset, batch_size=batch_size)
+    return dataloader
+
+
+def train_nn(
+    input_size,
+    hidden_size,
+    num_classes,
+    train_loader,
+    valid_loader,
+    test_loader,
+    args,
+):
+    # Create an instance of the model
+    model = NeuralNet(input_size, hidden_size, num_classes, args.lr)
+
+    early_stopping = pl.callbacks.EarlyStopping(
+        monitor="val_loss",
+        patience=args.patience,
+        mode="min",
+    )
+
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(
+        monitor="val_loss",
+        dirpath=f"checkpoints_{args.label}",
+        filename="best-checkpoint",
+        save_top_k=1,
+        mode="min",
+    )
+
+    # Create a PyTorch Lightning trainer
+    trainer = pl.Trainer(
+        max_epochs=args.max_epochs,
+        accelerator="gpu",
+        devices=1,
+        callbacks=[early_stopping, checkpoint_callback],
+        deterministic=True,
+    )
+
+    # Train the model
+    trainer.fit(model, train_loader, valid_loader)
+
+    score = trainer.test(model, test_loader)
+
+    return score
 
 
 def main(args):
@@ -205,18 +258,51 @@ def main(args):
     logger.info(f"y_test.shape: {y_test.shape}")
 
     # TODO: Add stratify option
-    clf = LogisticRegression(random_state=args.seed, max_iter=10**15).fit(
-        X_train, y_train
-    )
-    preds = clf.predict(X_test)
-    score = clf.score(X_test, y_test)
+    if args.model == "logistic":
+        clf = LogisticRegression(
+            random_state=args.seed, max_iter=10**17
+        ).fit(X_train, y_train)
+        # preds = clf.predict(X_test)
+        score = clf.score(X_test, y_test)
+
+    elif args.model == "nn":
+        X_train, X_valid, y_train, y_valid = train_test_split(
+            X_train,
+            y_train,
+            test_size=args.test_size,
+            random_state=args.seed,
+        )
+        train_loader = create_dataloader(X_train, y_train, args.batch_size)
+        valid_loader = create_dataloader(X_valid, y_valid, args.batch_size)
+        test_loader = create_dataloader(X_test, y_test, args.batch_size)
+
+        for batch in train_loader:
+            x, y = batch
+            print(x.shape)
+            print(y.shape)
+            break
+
+        input_size = X_train.shape[1]
+        hidden_size = 100
+        num_classes = len(np.unique(y_train))
+        score = train_nn(
+            input_size,
+            hidden_size,
+            num_classes,
+            train_loader,
+            valid_loader,
+            test_loader,
+            args,
+        )
+    else:
+        raise ValueError(f"Unknown model: {args.model}")
 
     logger.info(f"Accuracy: {score}")
-    logger.info(
+    """logger.info(
         f"Predicted value counts: {np.unique(preds, return_counts=True)}"
-    )
+    )"""
 
-    if not args.decomp_dim:
+    if args.model == "logistic" and not args.decomp_dim:
         coef = clf.coef_[0]
         weighted_indices = [
             i for i, c in enumerate(coef) if c > args.threshold
@@ -233,6 +319,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
+    # Data preprocessing hyperparameters
     parser.add_argument(
         "--label",
         type=str,
@@ -250,6 +338,30 @@ if __name__ == "__main__":
         default=0.1,
         help="Test size for train-test split",
     )
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="logistic",
+        help="Model for text classification",
+        choices=["logistic", "nn"],
+    )
+
+    # NN model hyperparameters
+    parser.add_argument(
+        "--lr", type=float, default=1e-4, help="Learning rate for nn"
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=128, help="Batch size for nn"
+    )
+    parser.add_argument(
+        "--max_epochs", type=int, default=30, help="Max epochs for nn"
+    )
+    parser.add_argument(
+        "--patience", type=int, default=2, help="Patience for nn"
+    )
+
+    # Logistic regression hyperparameters
     parser.add_argument(
         "--encoder",
         type=str,
@@ -269,6 +381,7 @@ if __name__ == "__main__":
         default=0.3,
         help="Threshold for feature selection",
     )
+
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for train-test split"
     )
@@ -285,4 +398,5 @@ if __name__ == "__main__":
         output_folder_path.mkdir(parents=True)
     args.output_path = output_folder_path / f"{args.label}.json"
 
+    pl.seed_everything(args.seed)
     main(args)
