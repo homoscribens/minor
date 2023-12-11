@@ -1,15 +1,12 @@
 import argparse
 import json
-import os
 import pathlib
 from datetime import datetime
 from logging import INFO, basicConfig, getLogger
 
 import numpy as np
-import openai
 import pandas as pd
 import pytorch_lightning as pl
-import umap
 import vibrato
 import zstandard as zstd
 from sklearn.decomposition import TruncatedSVD
@@ -49,13 +46,13 @@ def initialize_logger():
 logger = initialize_logger()
 
 # OpenAI API key
+"""
 api_key = os.getenv("OPENAI_API_KEY")
 client = openai.OpenAI(api_key=api_key)
+"""
 
 
-def get_tfidf_matrix(
-    tokenizer, sys_utter, user_utter, decomp_dim=100, seed=42
-):
+def get_tfidf_matrix(tokenizer, sys_utter, user_utter, decomp_dim=100, seed=42):
     logger.info("Fitting TfidfVectorizer...")
     tfidf = TfidfVectorizer(
         analyzer=lambda x: [token.surface() for token in tokenizer.tokenize(x)]
@@ -95,6 +92,7 @@ def get_tfidf_matrix(
     return utter_embeddings, None
 
 
+"""
 def get_embedding(text):
     logger.info("Getting embeddings...")
     if len(text) > 2048:
@@ -119,8 +117,9 @@ def get_embedding(text):
     )
     embeddings = [data.embedding for data in response.data]
     return np.array(embeddings)
+"""
 
-
+"""
 def get_ada_embeddings(sys_utter, user_utter, decomp_dim=100, seed=42):
     sys_embeddings = get_embedding(sys_utter)
     user_embeddings = get_embedding(user_utter)
@@ -135,10 +134,9 @@ def get_ada_embeddings(sys_utter, user_utter, decomp_dim=100, seed=42):
     sys_embeddings = reducer.fit_transform(sys_embeddings)
     user_embeddings = reducer.fit_transform(user_embeddings)
 
-    utter_embeddings = np.concatenate(
-        [sys_embeddings, user_embeddings], axis=1
-    )
+    utter_embeddings = np.concatenate([sys_embeddings, user_embeddings], axis=1)
     return utter_embeddings
+"""
 
 
 def preprocess(df, tokenizer, args):
@@ -154,11 +152,14 @@ def preprocess(df, tokenizer, args):
             decomp_dim=args.decomp_dim,
             seed=args.seed,
         )
-    elif args.encoder == "ada":
-        utter_embeddings = get_ada_embeddings(
-            sys_utters, user_utters, decomp_dim=args.decomp_dim, seed=args.seed
-        )
-        tfidf_feature_names = None
+        if not args.multimodal:
+            assert len(df) == len(utter_embeddings)
+            logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
+            logger.info(f"labels.shape: {labels.shape}")
+            df = pd.DataFrame(utter_embeddings)
+            df.columns = df.columns.astype(str)
+            return df, labels, tfidf_feature_names
+
     elif args.encoder == "None":
         utter_embeddings = None
     else:
@@ -179,19 +180,18 @@ def preprocess(df, tokenizer, args):
         "TC",
     ]
     for pattern in column_keywords_to_drop:
-        columns_to_drop = columns_to_drop.union(
-            df.filter(like=pattern).columns
-        )
+        columns_to_drop = columns_to_drop.union(df.filter(like=pattern).columns)
 
     df = df.drop(columns=columns_to_drop)
 
-    if args.encoder == "tfidf":
-        assert len(df) == len(utter_embeddings)
-        logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
-        logger.info(f"labels.shape: {labels.shape}")
-        df = pd.concat([df, pd.DataFrame(utter_embeddings)], axis=1)
-        df.columns = df.columns.astype(str)
-        return df, labels, tfidf_feature_names
+    if args.encoder == "tfidf" and args.multimodal:
+        if args.multimodal:
+            assert len(df) == len(utter_embeddings)
+            logger.info(f"utter_embeddings.shape: {utter_embeddings.shape}")
+            logger.info(f"labels.shape: {labels.shape}")
+            df = pd.concat([df, pd.DataFrame(utter_embeddings)], axis=1)
+            df.columns = df.columns.astype(str)
+            return df, labels, tfidf_feature_names
 
     return df, labels, None
 
@@ -279,9 +279,9 @@ def main(args):
     logger.info(f"y_test.shape: {y_test.shape}")
 
     if args.model == "logistic":
-        clf = LogisticRegression(
-            random_state=args.seed, max_iter=10**17
-        ).fit(X_train, y_train)
+        clf = LogisticRegression(random_state=args.seed, max_iter=10**17).fit(
+            X_train, y_train
+        )
         # preds = clf.predict(X_test)
         score = clf.score(X_test, y_test)
 
@@ -318,9 +318,7 @@ def main(args):
 
     if args.model == "logistic" and not args.decomp_dim:
         coef = clf.coef_[0]
-        weighted_indices = [
-            i for i, c in enumerate(coef) if c > args.threshold
-        ]
+        weighted_indices = [i for i, c in enumerate(coef) if c > args.threshold]
         weighted_features = [feature_names[i] for i in weighted_indices]
         weighted_dict = {feature_names[i]: coef[i] for i in weighted_indices}
         logger.info(f"Selected features: {weighted_features}")
@@ -336,6 +334,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # Data preprocessing hyperparameters
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        help="Whether to use multimodal features",
+    )
     parser.add_argument(
         "--label",
         type=str,
