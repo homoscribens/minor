@@ -16,10 +16,15 @@ vibrato = "^0.2.0"
 zstandard = "^0.22.0"
 umap-learn = "^0.5.5"
 wordcloud = "^1.9.2"
-torch = "^2.1.1"
 lightning = "^2.1.2"
 captum = "^0.6.0"
+torch = {version = "^2.1.1+cu118", source = "torch_cu118"}
 
+
+[[tool.poetry.source]]
+name = "torch_cu118"
+url = "https://download.pytorch.org/whl/cu118"
+priority = "explicit"
 
 [build-system]
 requires = ["poetry-core"]
